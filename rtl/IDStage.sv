@@ -6,6 +6,11 @@ module id_stage (
     input  logic         stall_id,
     input  logic         flush_id,
     input  IF_ID_t       if_id_i,
+    
+    // Register file read ports (from top level)
+    input  logic [31:0]  rf_rs1_data_i,
+    input  logic [31:0]  rf_rs2_data_i,
+    
     output ID_EX_t       id_ex_o
 );
 
@@ -37,19 +42,17 @@ module id_stage (
         id_ex_l.rd         = rd;
         id_ex_l.imm        = imm;
         id_ex_l.ctrl       = ctrl;
-        // register file read values can also be assigned here later:
-        // id_ex_l.rs1_data = rf_rs1_data;
-        // id_ex_l.rs2_data = rf_rs2_data;
+        id_ex_l.rs1_data   = rf_rs1_data_i;
+        id_ex_l.rs2_data   = rf_rs2_data_i;
     end
 
-    // Sequential stage register (owning the flop)
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             id_ex_o <= '0;
+        end else if (flush_id) begin
+        id_ex_o.valid <= 1'b0;
         end else if (stall_id) begin
             id_ex_o <= id_ex_o;
-        end else if (flush_id) begin
-            id_ex_o.valid <= 1'b0;
         end else begin
             id_ex_o <= id_ex_l;
         end

@@ -24,20 +24,18 @@ module decoder
     OP_OP     = 7'b0110011,
     OP_SYSTEM = 7'b1110011;
 
-  logic [6:0] opcode = instr_i[6:0];
-  logic [2:0] f3     = instr_i[14:12];
-  logic       f7b5   = instr_i[30];
+  logic [6:0] opcode = instr_i[6:0]; //always bits [6:0]
+  logic [2:0] funct3 = instr_i[14:12];
+  logic [6:0] funct7 = instr_i[31:25];
 
   // Instruction bitfield layout (RV32):
-  //  31                25 24   20 19   15 14  12 11    7 6     0
-  // [imm[11:0] or funct7] [rs2] [rs1] [funct3] [rd] [opcode]
-  // For readability:
+
   //  - opcode  = instr[6:0]
-  //  - rd      = instr[11:7]
+  //  - rd      = instr[11:7] or imm (for S-type)
   //  - funct3  = instr[14:12]
   //  - rs1     = instr[19:15]
-  //  - rs2     = instr[24:20]
-  //  - funct7  = instr[31:25] (we use bit 30 as f7b5 to distinguish some ops)
+  //  - rs2     = instr[24:20] or imm (for I-type)
+  //  - funct7  = instr[31:25] (full 7-bit field decoded for future expansion)
   //
   // Immediate encodings summary (where bits come from in the 32-bit word):
   //  - I-type: imm[11:0] = instr[31:20]
@@ -57,14 +55,14 @@ module decoder
   function automatic logic [31:0] imm_i(input logic [31:0] ins);
     logic [11:0] imm12;
     imm12 = (ins >> 20) & 12'hFFF; // mask low 12 bits after shift
-    imm_i = {{20{imm12[11]}}, imm12}; // sign-extend
+    imm_i = {{20{imm12[11]}}, imm12}; //sign-extend
   endfunction
 
   // S-type: imm[11:5]=instr[31:25], imm[4:0]=instr[11:7]
   function automatic logic [31:0] imm_s(input logic [31:0] ins);
     logic [11:0] imm12;
     imm12 = (((ins >> 25) & 7'h7F) << 5) | ((ins >> 7) & 5'h1F);
-    imm_s = {{20{imm12[11]}}, imm12};
+    imm_s = {{20{imm12[11]}}, imm12}; //sign-extend
   endfunction
 
   // B-type: imm[12]=instr[31], imm[11]=instr[7], imm[10:5]=instr[30:25], imm[4:1]=instr[11:8], imm[0]=0
@@ -108,20 +106,20 @@ module decoder
     imm = 32'h0;
     illegal_o = 1'b0; // assume legal until proven otherwise
 
-    // dispatch on opcode
     case (opcode)
       OP_OP: begin
         // R-type arithmetic. We only support add/sub for now.
+        // Full funct7+funct3 decoded to allow easy expansion later
         c.reg_write = 1'b1; // writes back to rd
-        case ({f7b5,f3})
-          4'b0_000: begin
+        case ({funct7, funct3})
+          10'b0000000_000: begin
             c.alu_op = ALU_ADD; // add
           end
-          4'b1_000: begin
+          10'b0100000_000: begin
             c.alu_op = ALU_SUB; // sub
           end
           default: begin
-            // unsupported R-type
+            // unsupported R-type (e.g., AND, OR, XOR, shifts, MUL/DIV not implemented)
             illegal_o = 1'b1;
             c.reg_write = 1'b0;
           end
@@ -132,7 +130,7 @@ module decoder
         // I-type immediate ALU. We only accept ADDI here.
         c.op_b_sel  = OP_B_IMM;
         imm = imm_i(instr_i);
-        if (f3 == 3'b000) begin
+        if (funct3 == 3'b000) begin
           c.reg_write = 1'b1;
           c.alu_op = ALU_ADD; // addi
         end else begin
@@ -142,7 +140,7 @@ module decoder
 
       OP_LOAD: begin
         // LW only
-        if (f3 == 3'b010) begin
+        if (funct3 == 3'b010) begin
           c.reg_write = 1'b1;
           c.mem_read  = 1'b1;
           c.wb_sel    = WB_MEM;
@@ -156,7 +154,7 @@ module decoder
 
       OP_STORE: begin
         // SW only
-        if (f3 == 3'b010) begin
+        if (funct3 == 3'b010) begin
           c.mem_write = 1'b1;
           c.op_b_sel  = OP_B_IMM;
           imm         = imm_s(instr_i);
@@ -168,7 +166,7 @@ module decoder
 
       OP_BRANCH: begin
         // only BEQ and BNE supported in reduced set
-        case (f3)
+        case (funct3)
           3'b000: begin c.branch_kind = BR_BEQ; end
           3'b001: begin c.branch_kind = BR_BNE; end
           default: begin illegal_o = 1'b1; end
